@@ -4,7 +4,7 @@ pipeline {
     stages {
         stage('Clone Repo') {
             steps {
-                git 'https://github.com/Ashish1806xx/ci-cd-sample-app.git'
+                git 'https://github.com/Ashish1806xx/Jenkinslab.git'
             }
         }
 
