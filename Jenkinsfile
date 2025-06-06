@@ -1,10 +1,6 @@
 pipeline {
     agent any
 
-    environment {
-        NVD_API_KEY = credentials('nvd_api_key')
-    }
-
     stages {
         stage('Clone Repo') {
             steps {
@@ -25,9 +21,9 @@ pipeline {
             }
         }
 
-        stage('Security Scan - DependencyCheck') {
+        stage('Security Scan - OWASP DependencyCheck') {
             steps {
-                sh '/opt/dependency-check/bin/dependency-check.sh --nvdApiKey ${NVD_API_KEY} --project "JenkinsLab" --scan . --format HTML --out dependency-check-report'
+                sh '/opt/dependency-check/bin/dependency-check.sh --propertyfile /var/lib/jenkins/dependency-check.properties --project "JenkinsLab" --scan . --format HTML --out dependency-check-report'
             }
         }
     }
