@@ -20,5 +20,11 @@ pipeline {
                 echo 'Simulated Test Passed'
             }
         }
+
+        stage('Security Scan - DependencyCheck') {
+            steps {
+                sh '/opt/dependency-check/bin/dependency-check.sh --project "JenkinsLab" --scan . --format HTML --out dependency-check-report'
+            }
+        }
     }
 }
