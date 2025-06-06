@@ -23,7 +23,15 @@ pipeline {
 
         stage('Security Scan - OWASP DependencyCheck') {
             steps {
-                sh '/opt/dependency-check/bin/dependency-check.sh --propertyfile /var/lib/jenkins/dependency-check.properties --project "JenkinsLab" --scan . --format HTML --out dependency-check-report'
+                sh '''
+                    /opt/dependency-check/bin/dependency-check.sh \
+                    --data /var/lib/jenkins/owasp-dc \
+                    --propertyfile /var/lib/jenkins/dependency-check.properties \
+                    --project "JenkinsLab" \
+                    --scan . \
+                    --format HTML \
+                    --out dependency-check-report
+                '''
             }
         }
     }
