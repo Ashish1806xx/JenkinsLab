@@ -2,23 +2,22 @@ pipeline {
     agent any
 
     stages {
-        stage('Clone') {
+        stage('Clone Repo') {
             steps {
-                git 'https://github.com/Ashish1806xx/JenkinsLab.git'
+                git 'https://github.com/Ashish1806xx/ci-cd-sample-app.git'
             }
         }
 
         stage('Build') {
             steps {
-                echo 'Simulating build step...'
-                sh 'echo Build completed'
+                echo 'Running Python App'
+                sh 'python3 app.py'
             }
         }
 
         stage('Test') {
             steps {
-                echo 'Running dummy test...'
-                sh 'echo All tests passed'
+                echo 'Simulated Test Passed'
             }
         }
     }
