@@ -75,13 +75,13 @@ pipeline {
       steps {
         sh '''
           # Start the app for scanning
-          docker run -d --rm --name app-under-test -p 8080:8080 "$IMAGE"
+          docker run -d --rm --name app-under-test -p 8081:8080 "$IMAGE"
           # Give it a moment
           sleep 5
 
           # Run ZAP baseline (non-auth)
           docker run --rm --network host owasp/zap2docker-stable zap-baseline.py \
-            -t http://localhost:8080 -m 3 -r zap_report.html -x zap_report.xml || true
+            -t http://localhost:8081 -m 3 -r zap_report.html -x zap_report.xml || true
 
           # Stop app
           docker stop app-under-test || true
