@@ -7,4 +7,7 @@ terraform {
   }
 }
 
-provider "docker" {}
+# Uses the Docker socket mounted by Jenkins in the Terraform container
+provider "docker" {
+  host = "unix:///var/run/docker.sock"
+}
