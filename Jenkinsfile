@@ -55,7 +55,7 @@ pipeline {
     stage('IaC Scan (tfsec)') {
       steps {
         dir('iac/terraform') {
-          sh 'docker run --rm -v "$PWD:/workdir" -w /workdir aquasecurity/tfsec:latest'
+          sh 'docker run --rm -v "$PWD:/workdir" -w /workdir aquasec/tfsec:latest'
         }
       }
     }
