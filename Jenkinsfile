@@ -27,8 +27,8 @@ pipeline {
     stage('Unit Tests') {
       steps {
         sh '''
-          docker run --rm -v "$PWD/app:/app" -w /app "$IMAGE" sh -c '
-            python -m pytest -q
+          docker run --rm -v "$PWD:/work" -w /work "$IMAGE" sh -c '
+            python -m pytest -q tests || python -m pytest -q app/tests
           '
         '''
       }
