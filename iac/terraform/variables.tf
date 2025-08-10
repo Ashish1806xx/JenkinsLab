@@ -10,13 +10,13 @@ variable "container_name" {
 }
 
 variable "host_port" {
-  description = "Host port to expose"
+  description = "Host port exposed on the Jenkins host"
   type        = number
   default     = 8082
 }
 
 variable "container_port" {
-  description = "Container internal port"
+  description = "Port the app listens on inside the container"
   type        = number
   default     = 8080
 }
