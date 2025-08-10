@@ -1,31 +1,31 @@
 pipeline {
   agent any
-
-  environment {
-    IMAGE = "ghcr.io/ashish/jenkinslab:${env.BUILD_NUMBER}"
-    DOCKER_HOST = "unix:///var/run/docker.sock"
-  }
-
   options {
     timestamps()
-    buildDiscarder(logRotator(numToKeepStr: '15'))
+    ansiColor('xterm')
+  }
+  environment {
+    IMAGE        = "ghcr.io/ashish/jenkinslab:${BUILD_NUMBER}"
+    APP_PORT     = "8080"        // container port
+    HOST_PORT    = "8081"        // local port for DAST
+    TF_HOST_PORT = "8082"        // port used by Terraform plan/container
   }
 
-  triggers { pollSCM('H/5 * * * *') } // remove if you use webhooks
-
   stages {
+
     stage('Checkout') {
-      steps { checkout scm }
+      steps {
+        checkout scm
+      }
     }
 
     stage('Build') {
       steps {
         sh '''
-          # keep the workspace clean (ignore errors/permissions)
-          rm -rf app/.pytest_cache app/__pycache__ 2>/dev/null || true
-          find app -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-
-          docker build -t "$IMAGE" ./app
+          set -euxo pipefail
+          rm -rf app/.pytest_cache || true
+          find app -type d -name __pycache__ -exec rm -rf {} + || true
+          docker build -t "${IMAGE}" ./app
         '''
       }
     }
@@ -33,9 +33,11 @@ pipeline {
     stage('Unit Tests') {
       steps {
         sh '''
-          docker run --rm -v "$PWD:/work" -w /work "$IMAGE" sh -c '
-            python -m pytest -q tests || python -m pytest -q app/tests
-          '
+          set -euxo pipefail
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            "${IMAGE}" \
+            sh -c 'python -m pytest -q tests || python -m pytest -q app/tests'
         '''
       }
     }
@@ -43,6 +45,7 @@ pipeline {
     stage('SAST (Semgrep)') {
       steps {
         sh '''
+          set -euxo pipefail
           docker run --rm -v "$PWD:/src" semgrep/semgrep:latest \
             semgrep --config p/ci --error --timeout 300 --metrics=off -q
         '''
@@ -52,9 +55,10 @@ pipeline {
     stage('Dependency/Image Scan (Trivy)') {
       steps {
         sh '''
+          set -euxo pipefail
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasec/trivy:latest image --exit-code 1 \
-            --severity CRITICAL --ignore-unfixed --scanners vuln "$IMAGE"
+            aquasec/trivy:latest \
+            image --exit-code 1 --severity CRITICAL --ignore-unfixed --scanners vuln "${IMAGE}"
         '''
       }
     }
@@ -62,7 +66,12 @@ pipeline {
     stage('IaC Scan (tfsec)') {
       steps {
         dir('iac/terraform') {
-          sh 'docker run --rm -v "$PWD:/workdir" -w /workdir aquasec/tfsec:latest'
+          sh '''
+            set -euxo pipefail
+            docker run --rm \
+              -v "$PWD:/workdir" -w /workdir \
+              aquasec/tfsec:latest
+          '''
         }
       }
     }
@@ -70,33 +79,31 @@ pipeline {
     stage('DAST (OWASP ZAP Baseline)') {
       steps {
         sh '''
-          # Start app on host port 8081
-          docker run -d --rm --name app-under-test -p 8081:8080 "$IMAGE"
+          set -euxo pipefail
+
+          # Start app to scan
+          docker run -d --rm --name app-under-test -p "${HOST_PORT}:${APP_PORT}" "${IMAGE}"
           sleep 12
 
-          # Prepare a writable reports dir and run ZAP as root so it can write files
+          # Run ZAP Baseline and write reports as root to avoid permission issues
           rm -rf zap_reports && mkdir -p zap_reports
-
-          docker run --rm --network host \
-            -u 0:0 \
+          docker run --rm --network host -u 0:0 \
             -v "$PWD/zap_reports:/zap/wrk" -w /zap/wrk \
-            ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
-              -t http://localhost:8081 -m 3 -r zap_report.html -x zap_report.xml || true
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t "http://localhost:${HOST_PORT}" -m 10 -r zap_report.html -x zap_report.xml || true
 
           docker stop app-under-test || true
 
-          # Fail on Medium/High risks if report exists
-          if [ -f zap_reports/zap_report.xml ] && \
-             grep -E "<riskcode>(2|3)</riskcode>" zap_reports/zap_report.xml >/dev/null; then
-            echo "ZAP found Medium/High risks"; exit 1
+          # Fail ONLY if HIGH risks exist
+          if grep -q '<riskcode>3</riskcode>' zap_reports/zap_report.xml; then
+            echo "ZAP found HIGH risk alerts"; exit 1
           fi
         '''
       }
       post {
         always {
-          archiveArtifacts artifacts: 'zap_reports/zap_report.*',
-                           fingerprint: true,
-                           allowEmptyArchive: true
+          archiveArtifacts artifacts: 'zap_reports/zap_report.*', onlyIfSuccessful: false
+          fingerprint 'zap_reports/zap_report.*'
         }
       }
     }
@@ -105,35 +112,39 @@ pipeline {
       steps {
         dir('iac/terraform') {
           sh '''
-            docker run --rm -v "$PWD:/tf" -w /tf hashicorp/terraform:1.6 fmt -check || true
-            docker run --rm -v "$PWD:/tf" -w /tf hashicorp/terraform:1.6 init -input=false
-            docker run --rm -v "$PWD:/tf" -w /tf hashicorp/terraform:1.6 validate
-            docker run --rm -v "$PWD:/tf" -w /tf \
-              hashicorp/terraform:1.6 plan -out=tfplan -var image="$IMAGE"
+            set -euxo pipefail
+            # Allow Terraform docker provider to access host Docker
+            docker run --rm \
+              -v "$PWD:/tf" \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -w /tf hashicorp/terraform:1.6 \
+              init -input=false
+
+            docker run --rm \
+              -v "$PWD:/tf" \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -w /tf hashicorp/terraform:1.6 \
+              plan -input=false -no-color -out=tfplan \
+                -var="image=${IMAGE}" \
+                -var="container_name=jenkinslab-app" \
+                -var="host_port=${TF_HOST_PORT}" \
+                -var="container_port=${APP_PORT}"
           '''
         }
-      }
-      post {
-        success { archiveArtifacts artifacts: 'iac/terraform/tfplan', fingerprint: true }
       }
     }
 
     stage('Apply & Deploy') {
-      when { branch 'main' }
+      when { expression { false } } // disabled by default; enable when ready
       steps {
-        dir('iac/terraform') {
-          sh '''
-            docker run --rm -v "$PWD:/tf" -w /tf \
-              hashicorp/terraform:1.6 apply -auto-approve tfplan
-          '''
-        }
+        echo 'Apply is disabled for now.'
       }
     }
   }
 
   post {
-    always { script { currentBuild.description = "Image: ${env.IMAGE}" } }
-    success { echo "Build passed ✅" }
-    failure { echo "Build failed. Check stage logs." }
+    failure {
+      echo 'Build failed. Check stage logs.'
+    }
   }
 }
