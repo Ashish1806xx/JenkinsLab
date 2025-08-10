@@ -2,7 +2,7 @@ pipeline {
   agent any
 
   environment {
-    IMAGE = "ghcr.io/ashish/jenkinslab:${env.BUILD_NUMBER}"   // tag is fine locally
+    IMAGE = "ghcr.io/ashish/jenkinslab:${env.BUILD_NUMBER}"
     DOCKER_HOST = "unix:///var/run/docker.sock"
   }
 
@@ -20,7 +20,11 @@ pipeline {
 
     stage('Build') {
       steps {
-        sh 'docker build -t "$IMAGE" ./app'
+        sh '''
+          rm -rf app/.pytest_cache app/__pycache__ || true
+          find app -type d -name "__pycache__" -exec rm -rf {} + || true
+          docker build -t "$IMAGE" ./app
+        '''
       }
     }
 
@@ -47,7 +51,8 @@ pipeline {
       steps {
         sh '''
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasec/trivy:latest image --exit-code 1 --severity CRITICAL --ignore-unfixed --scanners vuln "$IMAGE"
+            aquasec/trivy:latest image --exit-code 1 \
+            --severity CRITICAL --ignore-unfixed --scanners vuln "$IMAGE"
         '''
       }
     }
@@ -65,18 +70,25 @@ pipeline {
         sh '''
           # Run app on host port 8081 (Jenkins uses 8080)
           docker run -d --rm --name app-under-test -p 8081:8080 "$IMAGE"
-          sleep 10
-          docker run --rm --network host owasp/zap2docker-stable zap-baseline.py \
-            -t http://localhost:8081 -m 3 -r zap_report.html -x zap_report.xml || true
+          sleep 12
+
+          # Use the maintained ZAP image; write reports into the workspace
+          docker run --rm --network host \
+            -v "$PWD:/zap/wrk" -w /zap/wrk \
+            ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+              -t http://localhost:8081 -m 3 -r zap_report.html -x zap_report.xml || true
+
           docker stop app-under-test || true
 
-          # Fail the build on Medium/High findings
-          if grep -E "<riskcode>(2|3)</riskcode>" zap_report.xml >/dev/null; then
+          # Fail the build on Medium/High findings if report exists
+          if [ -f zap_report.xml ] && grep -E "<riskcode>(2|3)</riskcode>" zap_report.xml >/dev/null; then
             echo "ZAP found Medium/High risks"; exit 1; fi
         '''
       }
       post {
-        always { archiveArtifacts artifacts: 'zap_report.*', fingerprint: true }
+        always {
+          archiveArtifacts artifacts: 'zap_report.*', fingerprint: true, allowEmptyArchive: true
+        }
       }
     }
 
@@ -86,8 +98,9 @@ pipeline {
           sh '''
             docker run --rm -v "$PWD:/tf" -w /tf hashicorp/terraform:1.6 init -input=false
             docker run --rm -v "$PWD:/tf" -w /tf hashicorp/terraform:1.6 validate
-            docker run --rm -v "$PWD:/tf" -w /tf hashicorp/terraform:1.6 plan \
-              -out=tfplan -var image="$IMAGE"
+            docker run --rm -v "$PWD:/tf" -w /tf \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              hashicorp/terraform:1.6 plan -out=tfplan -var image="$IMAGE"
           '''
         }
       }
