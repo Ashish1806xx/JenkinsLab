@@ -2,7 +2,6 @@ pipeline {
   agent any
   options {
     timestamps()
-    ansiColor('xterm')
   }
   environment {
     IMAGE        = "ghcr.io/ashish/jenkinslab:${BUILD_NUMBER}"
@@ -81,11 +80,9 @@ pipeline {
         sh '''
           set -euxo pipefail
 
-          # Start app to scan
           docker run -d --rm --name app-under-test -p "${HOST_PORT}:${APP_PORT}" "${IMAGE}"
           sleep 12
 
-          # Run ZAP Baseline and write reports as root to avoid permission issues
           rm -rf zap_reports && mkdir -p zap_reports
           docker run --rm --network host -u 0:0 \
             -v "$PWD/zap_reports:/zap/wrk" -w /zap/wrk \
@@ -94,7 +91,7 @@ pipeline {
 
           docker stop app-under-test || true
 
-          # Fail ONLY if HIGH risks exist
+          # Fail ONLY on HIGH risks
           if grep -q '<riskcode>3</riskcode>' zap_reports/zap_report.xml; then
             echo "ZAP found HIGH risk alerts"; exit 1
           fi
@@ -113,7 +110,6 @@ pipeline {
         dir('iac/terraform') {
           sh '''
             set -euxo pipefail
-            # Allow Terraform docker provider to access host Docker
             docker run --rm \
               -v "$PWD:/tf" \
               -v /var/run/docker.sock:/var/run/docker.sock \
@@ -135,7 +131,7 @@ pipeline {
     }
 
     stage('Apply & Deploy') {
-      when { expression { false } } // disabled by default; enable when ready
+      when { expression { false } } // enable when ready
       steps {
         echo 'Apply is disabled for now.'
       }
