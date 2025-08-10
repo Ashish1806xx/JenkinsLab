@@ -11,7 +11,7 @@ pipeline {
     buildDiscarder(logRotator(numToKeepStr: '15'))
   }
 
-  triggers { pollSCM('H/5 * * * *') } // if no webhook
+  triggers { pollSCM('H/5 * * * *') } // remove if you use webhooks
 
   stages {
     stage('Checkout') {
@@ -21,8 +21,10 @@ pipeline {
     stage('Build') {
       steps {
         sh '''
-          rm -rf app/.pytest_cache app/__pycache__ || true
-          find app -type d -name "__pycache__" -exec rm -rf {} + || true
+          # keep the workspace clean (ignore errors/permissions)
+          rm -rf app/.pytest_cache app/__pycache__ 2>/dev/null || true
+          find app -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
           docker build -t "$IMAGE" ./app
         '''
       }
@@ -68,26 +70,33 @@ pipeline {
     stage('DAST (OWASP ZAP Baseline)') {
       steps {
         sh '''
-          # Run app on host port 8081 (Jenkins uses 8080)
+          # Start app on host port 8081
           docker run -d --rm --name app-under-test -p 8081:8080 "$IMAGE"
           sleep 12
 
-          # Use the maintained ZAP image; write reports into the workspace
+          # Prepare a writable reports dir and run ZAP as root so it can write files
+          rm -rf zap_reports && mkdir -p zap_reports
+
           docker run --rm --network host \
-            -v "$PWD:/zap/wrk" -w /zap/wrk \
+            -u 0:0 \
+            -v "$PWD/zap_reports:/zap/wrk" -w /zap/wrk \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
               -t http://localhost:8081 -m 3 -r zap_report.html -x zap_report.xml || true
 
           docker stop app-under-test || true
 
-          # Fail the build on Medium/High findings if report exists
-          if [ -f zap_report.xml ] && grep -E "<riskcode>(2|3)</riskcode>" zap_report.xml >/dev/null; then
-            echo "ZAP found Medium/High risks"; exit 1; fi
+          # Fail on Medium/High risks if report exists
+          if [ -f zap_reports/zap_report.xml ] && \
+             grep -E "<riskcode>(2|3)</riskcode>" zap_reports/zap_report.xml >/dev/null; then
+            echo "ZAP found Medium/High risks"; exit 1
+          fi
         '''
       }
       post {
         always {
-          archiveArtifacts artifacts: 'zap_report.*', fingerprint: true, allowEmptyArchive: true
+          archiveArtifacts artifacts: 'zap_reports/zap_report.*',
+                           fingerprint: true,
+                           allowEmptyArchive: true
         }
       }
     }
@@ -96,10 +105,10 @@ pipeline {
       steps {
         dir('iac/terraform') {
           sh '''
+            docker run --rm -v "$PWD:/tf" -w /tf hashicorp/terraform:1.6 fmt -check || true
             docker run --rm -v "$PWD:/tf" -w /tf hashicorp/terraform:1.6 init -input=false
             docker run --rm -v "$PWD:/tf" -w /tf hashicorp/terraform:1.6 validate
             docker run --rm -v "$PWD:/tf" -w /tf \
-              -v /var/run/docker.sock:/var/run/docker.sock \
               hashicorp/terraform:1.6 plan -out=tfplan -var image="$IMAGE"
           '''
         }
@@ -115,7 +124,6 @@ pipeline {
         dir('iac/terraform') {
           sh '''
             docker run --rm -v "$PWD:/tf" -w /tf \
-              -v /var/run/docker.sock:/var/run/docker.sock \
               hashicorp/terraform:1.6 apply -auto-approve tfplan
           '''
         }
