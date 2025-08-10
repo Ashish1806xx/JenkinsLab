@@ -1,8 +1,18 @@
 from flask import Flask
+import os
+
 app = Flask(__name__)
+
 @app.get("/health")
-def health(): return {"status":"ok"}
+def health():
+    return {"status": "ok"}
+
 @app.get("/")
-def index(): return "Hello from CI/CD!"
+def index():
+    return "Hello from CI/CD!"
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    # For local dev only; in the container we use Gunicorn (see Dockerfile CMD).
+    # Use default host (127.0.0.1) so SAST is happy.
+    port = int(os.environ.get("PORT", "8080"))
+    app.run(port=port)
